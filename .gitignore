@@ -28,6 +28,14 @@ bot/config/accounts_config.json
 # Игнорировать папку build внутри bot/core
 bot/core/build/
 
+# Игнорировать backup и temporary файлы
+*_backup.py
+ANTLADS_IMPROVEMENTS.md
+*.backup
+*.temp
+
 * text=auto
 bot/config/proxies.txt
-
+/.qoder/rules/rules.md
+test/
+ /.vscode/settings.json

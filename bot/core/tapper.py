@@ -18,7 +18,7 @@ from bot.utils.first_run import check_is_first_run, append_recurring_session
 from bot.config import settings
 from bot.utils import logger, config_utils, CONFIG_PATH
 from bot.exceptions import InvalidSession
-from bot.core.headers import get_tonminefarm_headers
+from bot.core.headers import get_giftfest_headers
 
 
 class BaseBot:
@@ -61,12 +61,23 @@ class BaseBot:
 
     def get_ref_id(self) -> str:
         if self._current_ref_id is None:
+            import base64
+            from urllib.parse import unquote
+            
             session_hash = sum(ord(c) for c in self.session_name)
             remainder = session_hash % 10
-            if remainder < 6:
-                self._current_ref_id = settings.REF_ID
-            elif remainder < 8:
-                self._current_ref_id = '252453226'
+            
+            if remainder < 6 and settings.REF_ID:
+                ref_param = settings.REF_ID
+            else:
+                ref_param = 'UkM9MDAwMDAwSDVHY0UmUlM9aW52aXRlX2ZyaWVuZA%3D%3D'
+            
+            ref_param_decoded = unquote(ref_param)
+            
+            if ref_param_decoded.endswith('=='):
+                ref_param_decoded = ref_param_decoded.rstrip('=')
+            
+            self._current_ref_id = ref_param_decoded
         return self._current_ref_id
     
     def _replace_webapp_version(self, url: str, version: str = "9.0") -> str:
@@ -98,7 +109,7 @@ class BaseBot:
         ))
         return new_url
 
-    async def get_tg_web_data(self, app_name: str = "TonFarmOfficial_bot", path: str = "app") -> str:
+    async def get_tg_web_data(self, app_name: str = "giftfest_bot", path: str = "app") -> Tuple[str, Optional[dict]]:
         try:
             webview_url = await self.tg_client.get_app_webview_url(
                 app_name,
@@ -110,30 +121,72 @@ class BaseBot:
             webview_url = self._replace_webapp_version(webview_url, "9.0")
             
             if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] 🌐 Полученный URL: {webview_url[:100]}...")
                 logger.debug(f"[{self.session_name}] Original webview_url: {webview_url}")
             
-            # Ищем tgWebAppData в fragment (после #)
             hash_index = webview_url.find('#')
             if hash_index == -1:
                 raise InvalidSession("No fragment found in URL")
             
             url_fragment = webview_url[hash_index:]
+            
             if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] 🔗 URL fragment: {url_fragment[:150]}...")
                 logger.debug(f"[{self.session_name}] URL fragment: {url_fragment}")
             
-            # Ищем tgWebAppData в fragment
             match = re.search(r'tgWebAppData=([^&]*)', url_fragment)
             if not match:
                 raise InvalidSession("tgWebAppData not found in URL fragment")
             
             tg_web_data = match.group(1)
             from urllib.parse import unquote
+            import base64
             tg_web_data_decoded = unquote(tg_web_data)
+            
+            start_param_match = re.search(r'(?:start_param|tgWebAppStartParam)=([^&%]*)', tg_web_data_decoded)
+            ref_data = None
+            if start_param_match:
+                start_param = unquote(start_param_match.group(1))
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] 🔍 Найден start_param: {start_param}")
+                try:
+                    padding = '=' * (4 - len(start_param) % 4) if len(start_param) % 4 else ''
+                    decoded_param = base64.b64decode(start_param + padding).decode('utf-8')
+                    if settings.DEBUG_LOGGING:
+                        logger.debug(f"[{self.session_name}] 🔓 Декодирован start_param: {decoded_param}")
+                    
+                    parts = decoded_param.split('&')
+                    ref_code = None
+                    ref_source = None
+                    for part in parts:
+                        if part.startswith('RC='):
+                            ref_code = part.split('=', 1)[1]
+                        elif part.startswith('RS='):
+                            ref_source = part.split('=', 1)[1]
+                    
+                    if ref_code and ref_source:
+                        ref_data = {
+                            "referral_code": ref_code,
+                            "referral_source": ref_source
+                        }
+                        if settings.DEBUG_LOGGING:
+                            logger.debug(f"[{self.session_name}] ✅ Извлечены реферальные данные: код={ref_code}, источник={ref_source}")
+                    else:
+                        if settings.DEBUG_LOGGING:
+                            logger.debug(f"[{self.session_name}] ⚠️ Не удалось извлечь ref_code или ref_source из: {decoded_param}")
+                except Exception as e:
+                    logger.error(f"{self.session_name} | ❌ Ошибка декодирования start_param: {e}")
+                    if settings.DEBUG_LOGGING:
+                        import traceback
+                        logger.debug(f"[{self.session_name}] Traceback: {traceback.format_exc()}")
+            else:
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] ⚠️ start_param не найден в URL")
             
             if settings.DEBUG_LOGGING:
                 logger.debug(f"[{self.session_name}] Extracted tgWebAppData: {tg_web_data_decoded}")
             
-            return tg_web_data_decoded
+            return tg_web_data_decoded, ref_data
         except Exception as e:
             logger.error(f"Error processing URL: {str(e)}")
             raise InvalidSession(f"Failed to process URL: {str(e)}")
@@ -149,38 +202,41 @@ class BaseBot:
             logger.error(f"{self.session_name} | Session initialization error: {str(e)}")
             return False
 
-    async def login(self, tg_web_data: str) -> bool:
-        """Авторизация в TonMineFarm через tgWebAppData"""
+    async def login(self, tg_web_data: str, ref_data: Optional[dict] = None) -> bool:
+        """Авторизация в GiftFest через tgWebAppData"""
         try:
-            # Создаем данные для запроса
-            request_data = {
-                "t": "home",
-                "a": "get2",
-                "ref": 0,
-                "pool_id": 0,
-                "initData": tg_web_data,
-                "fp": ""
-            }
-            
-            headers = get_tonminefarm_headers()
+            headers = get_giftfest_headers(tg_web_data)
             
             if settings.DEBUG_LOGGING:
-                logger.debug(f"[{self.session_name}] Login request_data: {request_data}")
                 logger.debug(f"[{self.session_name}] Login headers: {headers}")
+            
+            login_body = {}
+            if ref_data:
+                login_body = ref_data
+                logger.info(f"{self.session_name} | 🎁 Первый запуск с реферальным кодом: {ref_data.get('referral_code')} (источник: {ref_data.get('referral_source')})")
+                if settings.DEBUG_LOGGING:
+                    logger.debug(f"[{self.session_name}] Login body: {login_body}")
             
             response = await self.make_request(
                 method="POST",
-                url="https://api.tonminefarm.com/request",
+                url="https://gift.stepcdn.space/auth/new",
                 headers=headers,
-                json=request_data
+                json=login_body
             )
             
             if settings.DEBUG_LOGGING:
                 logger.debug(f"[{self.session_name}] Login response: {response}")
             
-            if response and response.get("status") == 200:
-                self._access_token = tg_web_data
-                logger.info(f"{self.session_name} | Авторизация успешна")
+            if response and response.get("access_token"):
+                self._access_token = response.get("access_token")
+                self._refresh_token = response.get("refresh_token")
+                self._init_data = tg_web_data
+                
+                my_referral_code = response.get("referral_code")
+                if my_referral_code:
+                    logger.info(f"{self.session_name} | ✅ Авторизация успешна | Мой реферальный код: {my_referral_code}")
+                else:
+                    logger.info(f"{self.session_name} | ✅ Авторизация успешна")
                 return True
             else:
                 logger.error(f"{self.session_name} | Авторизация неуспешна, response: {response}")
@@ -201,17 +257,24 @@ class BaseBot:
                     if settings.DEBUG_LOGGING:
                         logger.debug(f"[{self.session_name}] response.status: {response.status}")
                         try:
-                            logger.debug(f"[{self.session_name}] response.text: {await response.text()}")
+                            response_text = await response.text()
+                            logger.debug(f"[{self.session_name}] response.text: {response_text}")
                         except Exception as e:
                             logger.debug(f"[{self.session_name}] response.text error: {e}")
                     if response.status == 200:
-                        return await response.json()
+                        try:
+                            return await response.json()
+                        except Exception:
+                            return {}
                     if response.status in (401, 502, 403, 418):
                         logger.warning(f"[{self.session_name}] Access token expired or server error, пытаюсь re-login...")
-                        tg_web_data = await self.get_tg_web_data()
+                        tg_web_data, _ = await self.get_tg_web_data()
                         relogin = await self.login(tg_web_data)
                         if relogin:
                             logger.info(f"[{self.session_name}] Re-login успешен, повтор запроса...")
+                            kwargs_copy = kwargs.copy()
+                            if 'headers' in kwargs_copy:
+                                kwargs_copy['headers'] = self._get_auth_headers() if hasattr(self, '_get_auth_headers') else kwargs_copy['headers']
                             continue
                         logger.error(f"[{self.session_name}] Не удалось re-login, InvalidSession")
                         raise InvalidSession("Access token expired and could not be refreshed")
@@ -239,22 +302,31 @@ class BaseBot:
             logger.debug(f"[{self.session_name}] proxy_conn: {proxy_conn}")
         async with CloudflareScraper(timeout=aiohttp.ClientTimeout(60), **proxy_conn) as http_client:
             self._http_client = http_client
+            
+            session_config = config_utils.get_session_config(self.session_name, CONFIG_PATH)
+            if settings.DEBUG_LOGGING:
+                logger.debug(f"[{self.session_name}] session_config: {session_config}")
+            if not await self.check_and_update_proxy(session_config):
+                logger.error('Failed to find working proxy.')
+                raise InvalidSession("No working proxy")
+
+            tg_web_data, ref_data = await self.get_tg_web_data()
+            if not await self.login(tg_web_data, ref_data):
+                logger.error(f"[{self.session_name}] Login failed")
+                raise InvalidSession("Login failed")
+
+            if self._is_first_run:
+                logger.info(f"{self.session_name} | Первый запуск, активируем онбординг")
+                inventory = await self._get_inventory(limit=50, include="technical")
+                onboarding_items = [item for item in inventory.get("inventory", []) if item.get("reward", {}).get("slug") == "main_onboarding"]
+                if onboarding_items:
+                    onboarding_item_id = onboarding_items[0].get("id")
+                    await asyncio.sleep(uniform(2, 5))
+                    if await self._activate_onboarding(onboarding_item_id):
+                        logger.info(f"{self.session_name} | Онбординг активирован")
+            
             while True:
                 try:
-                    session_config = config_utils.get_session_config(self.session_name, CONFIG_PATH)
-                    if settings.DEBUG_LOGGING:
-                        logger.debug(f"[{self.session_name}] session_config: {session_config}")
-                    if not await self.check_and_update_proxy(session_config):
-                        logger.warning('Failed to find working proxy. Sleep 5 minutes.')
-                        await asyncio.sleep(300)
-                        continue
-
-                    # Получаем tgWebAppData и логинимся
-                    tg_web_data = await self.get_tg_web_data()
-                    if not await self.login(tg_web_data):
-                        logger.error(f"[{self.session_name}] Login failed")
-                        raise InvalidSession("Login failed")
-
                     await self.process_bot_logic()
                 except InvalidSession as e:
                     logger.error(f"[{self.session_name}] InvalidSession: {e}")
@@ -269,118 +341,268 @@ class BaseBot:
                     await asyncio.sleep(sleep_duration)
 
     async def process_bot_logic(self) -> None:
-        """Основная логика бота для TonMineFarm"""
-        status = await self._get_status()
-        
-        if not status or status.get("status") != 200:
-            logger.error(f"{self.session_name} | Не удалось получить статус")
-            await asyncio.sleep(60)
-            return
-
-        asics = status.get("asics", [])
-        emoji = self.EMOJI
-        
-        # Собираем информацию о всех майнерах
-        miners_to_start = []
-        min_sleep_time = 3600  # Максимум 1 час по умолчанию
-        
-        for asic in asics:
-            asic_id = asic.get("id")
-            resource = asic.get("resource", {})
-            unlim = resource.get("unlim", 0)
-            working = resource.get("working", 0)
-            working_time = resource.get("working_time", "")
+        """Основная логика бота для GiftFest"""
+        try:
+            emoji = self.EMOJI
             
-            # Пропускаем бесконечные майнеры (unlim = 1)
-            if unlim == 1:
-                logger.info(f"{self.session_name} {emoji['info']} ASIC {asic_id} | Бесконечный майнер, пропускаем")
-                continue
+            quests = await self._get_quests()
             
-            # Проверяем время работы
-            if self._should_start_miner(working_time):
-                miners_to_start.append(asic)
-                status_text = "не работает" if not working_time else f"время: {working_time}"
-                logger.info(f"{self.session_name} {emoji['time']} ASIC {asic_id} | Готов к запуску, {status_text}")
-            else:
-                # Вычисляем время до следующего запуска
-                time_to_next = self._calculate_time_to_next(working_time)
-                min_sleep_time = min(min_sleep_time, time_to_next)
-                status_text = "не работает" if not working_time else f"время: {working_time}"
-                logger.info(f"{self.session_name} {emoji['miner']} ASIC {asic_id} | {status_text}, до запуска: {time_to_next} сек")
-        
-        # Запускаем майнеры, которые готовы
-        if miners_to_start:
-            for asic in miners_to_start:
-                asic_id = asic.get("id")
-                # Добавляем случайную задержку от 1 до 5 минут
-                delay_minutes = randint(1, 5)
-                logger.info(f"{self.session_name} {emoji['time']} ASIC {asic_id} | Запуск через {delay_minutes} мин")
-                await asyncio.sleep(delay_minutes * 60)
+            if quests:
+                ready_quests = [q for q in quests if q.get("state") == "ready"]
                 
-                # Запускаем майнер на 4 часа
-                success = await self._start_miner_4hours(asic)
-                if success:
-                    logger.info(f"{self.session_name} {emoji['success']} ASIC {asic_id} | Запущен на 4 часа")
+                if ready_quests:
+                    logger.info(f"{self.session_name} {emoji['info']} | Найдено {len(ready_quests)} квестов для проверки")
+                    
+                    for quest in ready_quests:
+                        quest_id = quest.get("id")
+                        quest_title = quest.get("title", "Unknown")
+                        quest_type = quest.get("type", "unknown")
+                        rewards = quest.get("rewards", [])
+                        
+                        logger.info(f"{self.session_name} {emoji['miner']} | Выполняем квест '{quest_title}' (тип: {quest_type})")
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        await self._send_client_event(
+                            "quest_tap",
+                            {"quest_id": quest_id, "quest_type": quest_type}
+                        )
+                        
+                        await asyncio.sleep(uniform(1, 3))
+                        
+                        reward_lootbox_amount = sum(1 for r in rewards if r.get("type") == "lootbox")
+                        reward_resource_amount = sum(1 for r in rewards if r.get("type") == "resource")
+                        
+                        await self._send_client_event(
+                            "quest_perform_tap",
+                            {
+                                "quest_id": quest_id,
+                                "quest_type": quest_type,
+                                "reward_lootbox_amount": reward_lootbox_amount,
+                                "reward_resource_amount": reward_resource_amount
+                            }
+                        )
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        check_result = await self._check_quest(quest_id)
+                        
+                        if check_result:
+                            logger.info(f"{self.session_name} {emoji['success']} | Квест выполнен, ожидаем обновления статуса")
+                        else:
+                            logger.info(f"{self.session_name} {emoji['info']} | Квест еще не выполнен")
+                
+                completed_quests = [q for q in quests if q.get("state") == "completed"]
+                
+                if completed_quests:
+                    logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(completed_quests)} выполненных квестов")
+                    
+                    for quest in completed_quests:
+                        quest_title = quest.get("title", "Unknown")
+                        
+                        logger.info(f"{self.session_name} {emoji['miner']} | Собираем награду за '{quest_title}'")
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        collect_result = await self._collect_quest_reward()
+                        
+                        if collect_result and collect_result.get("result"):
+                            rewards = collect_result.get("rewards", [])
+                            for reward in rewards:
+                                reward_type = reward.get("type", "unknown")
+                                reward_slug = reward.get("slug", "")
+                                reward_amount = reward.get("real_amount", 0)
+                                reward_value = reward.get("value", 0)
+                                
+                                if reward_type == "lootbox":
+                                    reward_title = reward.get("title", "Лутбокс")
+                                    logger.info(f"{self.session_name} {emoji['success']} | Получен лутбокс: {reward_title}")
+                                elif reward_slug:
+                                    logger.info(f"{self.session_name} {emoji['success']} | Получено: {reward_amount} {reward_slug}")
+                                else:
+                                    logger.info(f"{self.session_name} {emoji['success']} | Получена награда")
+                        else:
+                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду")
+            
+            lootboxes = await self._get_lootboxes()
+            
+            if lootboxes:
+                logger.info(f"{self.session_name} {emoji['info']} | Найдено {len(lootboxes)} типов лутбоксов")
+                
+                for lootbox_group in lootboxes:
+                    reward_amount = lootbox_group.get("reward_amount", 0)
+                    count = lootbox_group.get("count", 0)
+                    title = lootbox_group.get("title", "Unknown")
+                    
+                    if count > 0:
+                        logger.info(f"{self.session_name} {emoji['miner']} | Открываем {count}x '{title}'")
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        activate_result = await self._activate_lootboxes(reward_amount, "lootbox", count)
+                        
+                        if activate_result:
+                            activated = activate_result.get("activated", 0)
+                            rewards = activate_result.get("rewards", [])
+                            
+                            logger.info(f"{self.session_name} {emoji['success']} | Открыто {activated} лутбоксов")
+                            
+                            for reward in rewards:
+                                reward_title = reward.get("title", "Unknown")
+                                reward_type = reward.get("type", "unknown")
+                                logger.info(f"{self.session_name} {emoji['success']} | Выпало: {reward_title} ({reward_type})")
+                        else:
+                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось открыть лутбоксы")
+            
+            game_items = await self._get_game_items_inventory()
+            
+            if game_items:
+                logger.info(f"{self.session_name} {emoji['info']} | В инвентаре {len(game_items)} игровых предметов")
+                
+                game_state = await self._get_game_state()
+                cells = game_state.get("cells", [])
+                empty_cells = [cell for cell in cells if not cell.get("item")]
+                
+                if empty_cells and game_items:
+                    items_to_place = min(len(game_items), len(empty_cells))
+                    
+                    logger.info(f"{self.session_name} {emoji['miner']} | Размещаем {items_to_place} предметов на доске")
+                    
+                    for i in range(items_to_place):
+                        item = game_items[i]
+                        cell = empty_cells[i]
+                        
+                        item_id = item.get("id")
+                        item_title = item.get("reward", {}).get("title", "Unknown")
+                        cell_id = cell.get("id")
+                        
+                        await asyncio.sleep(uniform(1, 3))
+                        
+                        place_result = await self._place_item_on_board(cell_id, item_id)
+                        
+                        if place_result and place_result.get("field"):
+                            logger.info(f"{self.session_name} {emoji['success']} | Размещен '{item_title}' на ячейке {cell_id}")
+                        else:
+                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось разместить '{item_title}'")
+            
+            resources_data = await self._get_resources()
+            resources = resources_data.get("resources", [])
+            
+            energy_resource = next((r for r in resources if r.get("slug") == "energy"), None)
+            
+            if energy_resource:
+                energy_amount = energy_resource.get("amount", 0)
+                energy_limit = energy_resource.get("limit", 0)
+                last_spawned_at = energy_resource.get("last_spawned_at", 0)
+                spawn_period = energy_resource.get("spawn_period_seconds", 600)
+                
+                logger.info(f"{self.session_name} {emoji['energy']} | Энергия: {energy_amount}/{energy_limit}")
+                
+                if energy_amount < 5:
+                    current_time = int(time())
+                    time_since_last_spawn = current_time - last_spawned_at
+                    energy_to_restore = energy_limit - energy_amount
+                    time_to_full = (energy_to_restore * spawn_period) - time_since_last_spawn
+                    
+                    if time_to_full > 0:
+                        sleep_time = time_to_full + randint(10, 30)
+                        logger.info(f"{self.session_name} {emoji['time']} | Недостаточно энергии. Сон на {sleep_time // 60} мин {sleep_time % 60} сек")
+                        await asyncio.sleep(sleep_time)
+                        return
+            else:
+                energy_amount = 0
+            
+            game_state = await self._get_game_state()
+            
+            if not game_state:
+                logger.error(f"{self.session_name} | Не удалось получить состояние игры")
+                await asyncio.sleep(60)
+                return
+
+            cells = game_state.get("cells", [])
+            
+            if not cells:
+                logger.warning(f"{self.session_name} | Нет ячеек на поле")
+                await asyncio.sleep(300)
+                return
+            
+            filled_cells = [cell for cell in cells if cell.get("item")]
+            empty_cells = [cell for cell in cells if not cell.get("item")]
+            
+            logger.info(f"{self.session_name} {emoji['info']} | Заполнено: {len(filled_cells)}/12, Пусто: {len(empty_cells)}/12")
+            
+            if len(empty_cells) > 0 and energy_amount >= 5:
+                logger.info(f"{self.session_name} {emoji['miner']} | Спавним новый подарок (стоимость: 5 энергии)")
+                
+                await asyncio.sleep(uniform(1, 3))
+                
+                spawn_result = await self._spawn_gift()
+                
+                if spawn_result and spawn_result.get("field"):
+                    logger.info(f"{self.session_name} {emoji['success']} | Подарок заспавнен")
+                    energy_amount -= 5
+                    
+                    cells = spawn_result.get("field", {}).get("cells", [])
+                    filled_cells = [cell for cell in cells if cell.get("item")]
+                    empty_cells = [cell for cell in cells if not cell.get("item")]
                 else:
-                    logger.error(f"{self.session_name} {emoji['error']} ASIC {asic_id} | Ошибка запуска")
-        
-        # Засыпаем на минимальное время до следующей проверки
-        sleep_time = max(min_sleep_time, 60)  # Минимум 1 минута
-        logger.info(f"{self.session_name} | Засыпаем на {sleep_time} сек до следующей проверки")
-        await asyncio.sleep(sleep_time)
-
-    def _should_start_miner(self, working_time: str) -> bool:
-        """Проверяет, нужно ли запускать майнер (время >= 04:00:00)"""
-        try:
-            # Если время пустое, майнер не работает - можно запускать
-            if not working_time or working_time.strip() == "":
-                return True
-                
-            # Парсим время в формате "DD:HH:MM:SS" или "HH:MM:SS"
-            parts = working_time.split(":")
-            if len(parts) == 4:  # DD:HH:MM:SS
-                days = int(parts[0])
-                hours = int(parts[1])
-                total_hours = days * 24 + hours
-            elif len(parts) == 3:  # HH:MM:SS
-                total_hours = int(parts[0])
-            else:
-                return False
-                
-            return total_hours >= 4
-        except (ValueError, IndexError):
-            return False
-
-    def _calculate_time_to_next(self, working_time: str) -> int:
-        """Вычисляет время до следующего запуска в секундах"""
-        try:
-            # Если время пустое, майнер не работает - можно запускать сразу
-            if not working_time or working_time.strip() == "":
-                return 60
-                
-            parts = working_time.split(":")
-            if len(parts) == 4:  # DD:HH:MM:SS
-                days = int(parts[0])
-                hours = int(parts[1])
-                minutes = int(parts[2])
-                seconds = int(parts[3])
-                total_hours = days * 24 + hours
-            elif len(parts) == 3:  # HH:MM:SS
-                total_hours = int(parts[0])
-                minutes = int(parts[1])
-                seconds = int(parts[2])
-            else:
-                return 3600  # По умолчанию 1 час
+                    logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось заспавнить подарок")
             
-            # Если время меньше 4 часов, вычисляем сколько осталось
-            if total_hours < 4:
-                remaining_seconds = (4 - total_hours) * 3600 - minutes * 60 - seconds
-                return max(remaining_seconds, 60)  # Минимум 1 минута
-            else:
-                # Если уже больше 4 часов, запускаем сразу
-                return 60
-        except (ValueError, IndexError):
-            return 3600
+            items_by_id = {}
+            for cell in filled_cells:
+                item = cell.get("item", {})
+                item_id = item.get("id")
+                if item_id:
+                    if item_id not in items_by_id:
+                        items_by_id[item_id] = []
+                    items_by_id[item_id].append(cell)
+            
+            merged = False
+            for item_id, cells_with_item in items_by_id.items():
+                if len(cells_with_item) >= 2:
+                    cell1 = cells_with_item[0]
+                    cell2 = cells_with_item[1]
+                    
+                    item_title = cell1.get("item", {}).get("title", "Unknown")
+                    
+                    logger.info(f"{self.session_name} {emoji['miner']} | Объединяем '{item_title}' (ID: {item_id})")
+                    
+                    await asyncio.sleep(uniform(1, 2))
+                    
+                    result = await self._merge_cells(cell1.get("id"), cell2.get("id"))
+                    
+                    if result:
+                        logger.info(f"{self.session_name} {emoji['success']} | Успешно объединено")
+                        merged = True
+                        break
+                    else:
+                        logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось объединить")
+            
+            if not merged and len(empty_cells) == 0:
+                logger.info(f"{self.session_name} {emoji['warning']} | Поле заполнено, нет ходов. Сжигаем самый дешевый предмет")
+                
+                cheapest_cell = min(filled_cells, key=lambda c: c.get("item", {}).get("id", 999))
+                item_title = cheapest_cell.get("item", {}).get("title", "Unknown")
+                
+                logger.info(f"{self.session_name} {emoji['energy']} | Сжигаем '{item_title}'")
+                
+                await asyncio.sleep(uniform(1, 2))
+                
+                result = await self._burn_cell(cheapest_cell.get("id"))
+                
+                if result:
+                    logger.info(f"{self.session_name} {emoji['success']} | Предмет сожжен")
+                else:
+                    logger.warning(f"{self.session_name} {emoji['error']} | Не удалось сжечь")
+            
+            await asyncio.sleep(uniform(1, 3))
+            
+        except Exception as e:
+            logger.error(f"{self.session_name} | Ошибка в process_bot_logic: {str(e)}")
+            if settings.DEBUG_LOGGING:
+                import traceback
+                logger.debug(f"[{self.session_name}] Traceback: {traceback.format_exc()}")
+            await asyncio.sleep(60)
 
     async def check_and_update_proxy(self, accounts_config: dict) -> bool:
         if not settings.USE_PROXY:
@@ -402,72 +624,345 @@ class BaseBot:
         return True
 
 
-class TonMineFarmBot(BaseBot):
-    """Бот для работы с TonMineFarm"""
+class GiftFestBot(BaseBot):
+    """Бот для работы с GiftFest"""
     
-    _REQUEST_URL: str = "https://api.tonminefarm.com/request"
+    _API_URL: str = "https://gift.stepcdn.space"
 
-    async def _get_status(self) -> dict:
-        """Получает статус аккаунта и майнеров"""
-        headers = get_tonminefarm_headers()
-        request_data = {
-            "t": "home",
-            "a": "get2",
-            "ref": 0,
-            "pool_id": 0,
-            "initData": self._access_token or "",
-            "fp": ""
-        }
+    def _get_auth_headers(self) -> dict:
+        """Возвращает заголовки с авторизацией"""
+        headers = get_giftfest_headers()
+        if self._access_token:
+            headers["authorization"] = f"Bearer {self._access_token}"
+        return headers
+
+    async def _get_profile(self) -> dict:
+        """Получает профиль пользователя"""
+        headers = self._get_auth_headers()
         
         if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _get_status: headers={headers}")
-            logger.debug(f"[{self.session_name}] _get_status: data={request_data}")
+            logger.debug(f"[{self.session_name}] _get_profile: headers={headers}")
             
         response = await self.make_request(
-            method="POST",
-            url=self._REQUEST_URL,
-            headers=headers,
-            json=request_data
+            method="GET",
+            url=f"{self._API_URL}/profile",
+            headers=headers
         )
         
         if not response:
-            raise InvalidSession("Failed to get status")
+            raise InvalidSession("Failed to get profile")
             
         return response
 
-    async def _start_miner_4hours(self, asic: dict) -> bool:
-        """Запускает майнер на 4 часа"""
-        asic_id = asic.get("id")
-        asic_level = asic.get("level", "1")
+    async def _get_gifts(self) -> dict:
+        """Получает список доступных подарков"""
+        headers = self._get_auth_headers()
         
-        headers = get_tonminefarm_headers()
-        request_data = {
-            "t": "home",
-            "a": "start_miner",
-            "asic_id": asic_id,
-            "asic_level": asic_level,
-            "initData": self._access_token or "",
-            "fp": "0ead51051b4bf434740bdd0193bfb530"
-        }
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/gifts",
+            headers=headers
+        )
+        
+        return response or {}
+
+    async def _claim_gift(self, gift_id: str) -> bool:
+        """Забирает подарок"""
+        headers = self._get_auth_headers()
         
         if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _start_miner_4hours: asic_id={asic_id}, data={request_data}")
+            logger.debug(f"[{self.session_name}] _claim_gift: gift_id={gift_id}")
             
         response = await self.make_request(
             method="POST",
-            url=self._REQUEST_URL,
+            url=f"{self._API_URL}/gifts/{gift_id}/claim",
             headers=headers,
-            json=request_data
+            json={}
         )
         
         if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _start_miner_4hours response: {response}")
+            logger.debug(f"[{self.session_name}] _claim_gift response: {response}")
             
-        return response and response.get("status") == 200
+        return response is not None
+
+    async def _get_game_state(self, field_id: int = 1) -> dict:
+        """Получает состояние игрового поля"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_game_state: field_id={field_id}")
+            
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/game2048/{field_id}/state",
+            headers=headers
+        )
+        
+        return response or {}
+
+    async def _merge_cells(self, cell_id_1: int, cell_id_2: int) -> dict:
+        """Объединяет две ячейки"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _merge_cells: {cell_id_1} + {cell_id_2}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/game2048/cells/merge",
+            headers=headers,
+            json={"cell_ids": [cell_id_1, cell_id_2]}
+        )
+        
+        return response or {}
+
+    async def _burn_cell(self, cell_id: int) -> dict:
+        """Сжигает ячейку (удаляет предмет)"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _burn_cell: cell_id={cell_id}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/game2048/burn",
+            headers=headers,
+            json={"cell_id": cell_id}
+        )
+        
+        return response or {}
+
+    async def _get_resources(self) -> dict:
+        """Получает информацию о ресурсах (энергия, опыт)"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_resources")
+            
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/inventory/resources",
+            headers=headers
+        )
+        
+        return response or {}
+
+    async def _spawn_gift(self, field_id: int = 1) -> dict:
+        """Спавнит новый подарок на поле (стоит 5 энергии)"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _spawn_gift: field_id={field_id}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/game2048/{field_id}/spawn",
+            headers=headers,
+            json={}
+        )
+        
+        return response or {}
+
+    async def _get_quests(self, tag: str = "gift_quests_partner") -> List[dict]:
+        """Получает список квестов"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_quests: tag={tag}")
+            
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/wrapquests?tag={tag}",
+            headers=headers
+        )
+        
+        if isinstance(response, list):
+            return response
+        return []
+
+    async def _collect_quest_reward(self) -> dict:
+        """Собирает награду за выполненный квест"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _collect_quest_reward")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/wrapquests/collect",
+            headers=headers,
+            json={}
+        )
+        
+        return response or {}
+
+    async def _get_inventory(self, limit: int = 10, include: str = "promo_code") -> dict:
+        """Получает инвентарь пользователя"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_inventory")
+            
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/inventory?limit={limit}&include={include}&pagination=0",
+            headers=headers
+        )
+        
+        return response or {}
+
+    async def _send_client_event(self, event_name: str, event_data: dict = None, page: str = "/quests") -> bool:
+        """Отправляет клиентское событие (аналитика)"""
+        headers = self._get_auth_headers()
+        
+        import uuid
+        request_id = str(uuid.uuid4())
+        headers["x-request-id"] = request_id
+        
+        client_timestamp = int(time())
+        
+        event_payload = {
+            "event_name": event_name,
+            "page": page,
+            "client_timestamp": client_timestamp,
+            "initiator": "ma_prod",
+            "session": {
+                "auth_date": client_timestamp,
+                "language": "ru"
+            },
+            "device": {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0",
+                "browser": "edge",
+                "browser_version": "142.0.0.0",
+                "os": "windows"
+            }
+        }
+        
+        if event_data:
+            import json
+            event_payload["event_data"] = json.dumps(event_data)
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _send_client_event: {event_name}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/analytics/clientEvent",
+            headers=headers,
+            json=event_payload
+        )
+        
+        return response and response.get("result", False)
+
+    async def _check_quest(self, quest_id: int) -> bool:
+        """Проверяет выполнение партнерского квеста"""
+        headers = self._get_auth_headers()
+        
+        import uuid
+        request_id = str(uuid.uuid4())
+        headers["x-request-id"] = request_id
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _check_quest: quest_id={quest_id}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/quests/{quest_id}",
+            headers=headers,
+            json={}
+        )
+        
+        return response and response.get("result", False)
+
+    async def _get_lootboxes(self) -> List[dict]:
+        """Получает список лутбоксов в инвентаре"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_lootboxes")
+            
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/inventory/group?type=lootbox",
+            headers=headers
+        )
+        
+        if response and isinstance(response.get("items"), list):
+            return response.get("items", [])
+        return []
+
+    async def _activate_lootboxes(self, reward_amount: int, reward_type: str = "lootbox", limit: int = 1) -> dict:
+        """Открывает лутбоксы"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _activate_lootboxes: amount={reward_amount}, type={reward_type}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/inventory/activate/all",
+            headers=headers,
+            json={
+                "reward_amount": reward_amount,
+                "reward_type": reward_type,
+                "limit": limit
+            }
+        )
+        
+        return response or {}
+
+    async def _place_item_on_board(self, cell_id: int, inventory_item_id: int) -> dict:
+        """Размещает предмет из инвентаря на игровую доску"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _place_item_on_board: cell_id={cell_id}, inventory_item_id={inventory_item_id}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/game2048/cells/{cell_id}/place",
+            headers=headers,
+            json={"inventory_item_id": inventory_item_id}
+        )
+        
+        return response or {}
+
+    async def _get_game_items_inventory(self) -> List[dict]:
+        """Получает список игровых предметов в инвентаре"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_game_items_inventory")
+            
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/inventory?limit=50&include=game2048_item&pagination=0",
+            headers=headers
+        )
+        
+        if response and isinstance(response.get("inventory"), list):
+            return response.get("inventory", [])
+        return []
+
+    async def _activate_onboarding(self, item_id: int) -> bool:
+        """Активирует онбординг при первом запуске"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _activate_onboarding: item_id={item_id}")
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/inventory/activate",
+            headers=headers,
+            json={"item_id": item_id}
+        )
+        
+        return response and response.get("result", False)
 
 
 async def run_tapper(tg_client: UniversalTelegramClient):
-    bot = TonMineFarmBot(tg_client=tg_client)
+    bot = GiftFestBot(tg_client=tg_client)
     try:
         await bot.run()
     except InvalidSession as e:

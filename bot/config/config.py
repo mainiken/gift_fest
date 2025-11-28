@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     SESSION_START_DELAY: int = 360
 
-    REF_ID: str = '252453226'
+    REF_ID: str = 'UkM9MDAwMDAwSDVHY0UmUlM9aW52aXRlX2ZyaWVuZA%3D%3D'
     SESSIONS_PER_PROXY: int = 1
     USE_PROXY: bool = True
     DISABLE_PROXY_REPLACE: bool = False

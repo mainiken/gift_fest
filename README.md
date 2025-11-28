@@ -1,4 +1,4 @@
-# AgentX Bot
+# GiftFest Bot
 
 [🇷🇺 Russian](README-RU.md) | [🇬🇧 English](README.md)
 
@@ -20,7 +20,7 @@
 ---
 
 ## 📜 Description
-**Agent X Bot** is an automated bot for the [Agent X](https://t.me/agntxbot/node?startapp=252453226) game. Supports multithreading, proxy integration, and automatic game management.
+**GiftFest Bot** is an automated bot for the [@giftfest_bot](https://t.me/giftfest_bot/app?startapp=UkM9MDAwMDAwSDVHY0UmUlM9aW52aXRlX2ZyaWVuZA%3D%3D) game. Supports multithreading, proxy integration, and automatic game management.
 
 ---
 
@@ -37,7 +37,7 @@
 ### Quick Start
 1. **Download the project:**
    ```bash
-   git clone https://github.com/mainiken/agentx.git
+   git clone https://github.com/mainiken/gift_fest.git
    cd agentx
    ```
 
