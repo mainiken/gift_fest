@@ -345,21 +345,103 @@ class BaseBot:
         try:
             emoji = self.EMOJI
             
-            quests = await self._get_quests()
+            daily_quests = await self._get_quests(tag="gift_quests_daily")
+            partner_quests = await self._get_quests(tag="gift_quests_partner")
+            advent_quests = await self._get_quests(tag="gift_advent")
             
-            if quests:
-                ready_quests = [q for q in quests if q.get("state") == "ready"]
+            all_quests = (daily_quests or []) + (partner_quests or []) + (advent_quests or [])
+            
+            if all_quests:
+                ready_advent_quests = [q for q in all_quests if q.get("state") == "ready" and q.get("type") == "simple_binary"]
                 
-                if ready_quests:
-                    logger.info(f"{self.session_name} {emoji['info']} | Найдено {len(ready_quests)} квестов для проверки")
+                if ready_advent_quests:
+                    logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(ready_advent_quests)} доступных ячеек адвент-календаря")
                     
-                    for quest in ready_quests:
+                    for quest in ready_advent_quests:
+                        quest_id = quest.get("id")
+                        quest_title = quest.get("title", "Unknown")
+                        rewards = quest.get("rewards", [])
+                        
+                        logger.info(f"{self.session_name} {emoji['miner']} | Открываем ячейку '{quest_title}'")
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        check_result = await self._check_quest(quest_id)
+                        
+                        if check_result:
+                            logger.info(f"{self.session_name} {emoji['success']} | Ячейка открыта, собираем награду")
+                            
+                            await asyncio.sleep(uniform(1, 3))
+                            
+                            collect_result = await self._collect_quest_reward()
+                            
+                            if collect_result and collect_result.get("result"):
+                                rewards_collected = collect_result.get("rewards", [])
+                                for reward in rewards_collected:
+                                    reward_type = reward.get("type", "unknown")
+                                    reward_slug = reward.get("slug", "")
+                                    reward_amount = reward.get("real_amount", 0)
+                                    
+                                    if reward_type == "calendar":
+                                        logger.info(f"{self.session_name} {emoji['success']} | Получено из календаря: {reward_amount} {reward_slug}")
+                                    elif reward_slug:
+                                        logger.info(f"{self.session_name} {emoji['success']} | Получено: {reward_amount} {reward_slug}")
+                                    else:
+                                        logger.info(f"{self.session_name} {emoji['success']} | Получена награда")
+                            else:
+                                logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду из календаря")
+                        else:
+                            logger.info(f"{self.session_name} {emoji['info']} | Ячейка календаря еще не доступна")
+                
+                completed_quests = [q for q in all_quests if q.get("state") == "completed"]
+                
+                if completed_quests:
+                    logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(completed_quests)} выполненных квестов для сбора наград")
+                    
+                    for quest in completed_quests:
+                        quest_title = quest.get("title", "Unknown")
+                        
+                        logger.info(f"{self.session_name} {emoji['miner']} | Собираем награду за '{quest_title}'")
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        collect_result = await self._collect_quest_reward()
+                        
+                        if collect_result and collect_result.get("result"):
+                            rewards = collect_result.get("rewards", [])
+                            for reward in rewards:
+                                reward_type = reward.get("type", "unknown")
+                                reward_slug = reward.get("slug", "")
+                                reward_amount = reward.get("real_amount", 0)
+                                
+                                if reward_type == "lootbox":
+                                    reward_title = reward.get("title", "Лутбокс")
+                                    logger.info(f"{self.session_name} {emoji['success']} | Получен лутбокс: {reward_title}")
+                                elif reward_slug:
+                                    logger.info(f"{self.session_name} {emoji['success']} | Получено: {reward_amount} {reward_slug}")
+                                else:
+                                    logger.info(f"{self.session_name} {emoji['success']} | Получена награда")
+                        else:
+                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду")
+                
+                pending_quests = [q for q in all_quests if q.get("state") == "pending"]
+                
+                if pending_quests:
+                    logger.info(f"{self.session_name} {emoji['info']} | Найдено {len(pending_quests)} квестов в ожидании")
+                    
+                    for quest in pending_quests:
                         quest_id = quest.get("id")
                         quest_title = quest.get("title", "Unknown")
                         quest_type = quest.get("type", "unknown")
                         rewards = quest.get("rewards", [])
+                        progress = quest.get("progress")
                         
-                        logger.info(f"{self.session_name} {emoji['miner']} | Выполняем квест '{quest_title}' (тип: {quest_type})")
+                        if progress:
+                            current = progress.get("current", 0)
+                            target = progress.get("target", 0)
+                            logger.info(f"{self.session_name} {emoji['info']} | Квест '{quest_title}': прогресс {current}/{target}")
+                        else:
+                            logger.info(f"{self.session_name} {emoji['info']} | Квест '{quest_title}' (тип: {quest_type})")
                         
                         await asyncio.sleep(uniform(2, 5))
                         
@@ -388,41 +470,13 @@ class BaseBot:
                         check_result = await self._check_quest(quest_id)
                         
                         if check_result:
-                            logger.info(f"{self.session_name} {emoji['success']} | Квест выполнен, ожидаем обновления статуса")
+                            logger.info(f"{self.session_name} {emoji['success']} | Квест проверен, ожидаем обновления статуса")
                         else:
                             logger.info(f"{self.session_name} {emoji['info']} | Квест еще не выполнен")
                 
-                completed_quests = [q for q in quests if q.get("state") == "completed"]
-                
-                if completed_quests:
-                    logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(completed_quests)} выполненных квестов")
-                    
-                    for quest in completed_quests:
-                        quest_title = quest.get("title", "Unknown")
-                        
-                        logger.info(f"{self.session_name} {emoji['miner']} | Собираем награду за '{quest_title}'")
-                        
-                        await asyncio.sleep(uniform(2, 5))
-                        
-                        collect_result = await self._collect_quest_reward()
-                        
-                        if collect_result and collect_result.get("result"):
-                            rewards = collect_result.get("rewards", [])
-                            for reward in rewards:
-                                reward_type = reward.get("type", "unknown")
-                                reward_slug = reward.get("slug", "")
-                                reward_amount = reward.get("real_amount", 0)
-                                reward_value = reward.get("value", 0)
-                                
-                                if reward_type == "lootbox":
-                                    reward_title = reward.get("title", "Лутбокс")
-                                    logger.info(f"{self.session_name} {emoji['success']} | Получен лутбокс: {reward_title}")
-                                elif reward_slug:
-                                    logger.info(f"{self.session_name} {emoji['success']} | Получено: {reward_amount} {reward_slug}")
-                                else:
-                                    logger.info(f"{self.session_name} {emoji['success']} | Получена награда")
-                        else:
-                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду")
+                done_quests = [q for q in all_quests if q.get("state") == "done"]
+                if done_quests:
+                    logger.info(f"{self.session_name} {emoji['success']} | Завершено квестов: {len(done_quests)}")
             
             lootboxes = await self._get_lootboxes()
             
