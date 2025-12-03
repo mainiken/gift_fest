@@ -748,7 +748,11 @@ class GiftFestBot(BaseBot):
 
     async def _collect_quest_reward(self) -> dict:
         """Собирает награду за выполненный квест"""
+        import uuid
+        
         headers = self._get_auth_headers()
+        headers["x-request-id"] = str(uuid.uuid4())
+        headers["content-length"] = "0"
         
         if settings.DEBUG_LOGGING:
             logger.debug(f"[{self.session_name}] _collect_quest_reward")
