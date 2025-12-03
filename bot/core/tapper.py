@@ -691,9 +691,9 @@ class GiftFestBot(BaseBot):
             
         response = await self.make_request(
             method="POST",
-            url=f"{self._API_URL}/game2048/burn",
+            url=f"{self._API_URL}/game2048/cells/{cell_id}/burn",
             headers=headers,
-            json={"cell_id": cell_id}
+            json={}
         )
         
         return response or {}
