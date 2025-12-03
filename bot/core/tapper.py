@@ -389,60 +389,6 @@ class BaseBot:
                                     logger.info(f"{self.session_name} {emoji['success']} | Получена награда")
                         else:
                             logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду")
-                
-                pending_quests = [q for q in all_quests if q.get("state") == "pending"]
-                
-                if pending_quests:
-                    logger.info(f"{self.session_name} {emoji['info']} | Найдено {len(pending_quests)} квестов в ожидании")
-                    
-                    for quest in pending_quests:
-                        quest_id = quest.get("id")
-                        quest_title = quest.get("title", "Unknown")
-                        quest_type = quest.get("type", "unknown")
-                        rewards = quest.get("rewards", [])
-                        progress = quest.get("progress")
-                        
-                        if progress:
-                            current = progress.get("current", 0)
-                            target = progress.get("target", 0)
-                            logger.info(f"{self.session_name} {emoji['info']} | Квест '{quest_title}': прогресс {current}/{target}")
-                        else:
-                            logger.info(f"{self.session_name} {emoji['info']} | Квест '{quest_title}' (тип: {quest_type})")
-                        
-                        await asyncio.sleep(uniform(2, 5))
-                        
-                        await self._send_client_event(
-                            "quest_tap",
-                            {"quest_id": quest_id, "quest_type": quest_type}
-                        )
-                        
-                        await asyncio.sleep(uniform(1, 3))
-                        
-                        reward_lootbox_amount = sum(1 for r in rewards if r.get("type") == "lootbox")
-                        reward_resource_amount = sum(1 for r in rewards if r.get("type") == "resource")
-                        
-                        await self._send_client_event(
-                            "quest_perform_tap",
-                            {
-                                "quest_id": quest_id,
-                                "quest_type": quest_type,
-                                "reward_lootbox_amount": reward_lootbox_amount,
-                                "reward_resource_amount": reward_resource_amount
-                            }
-                        )
-                        
-                        await asyncio.sleep(uniform(2, 5))
-                        
-                        check_result = await self._check_quest(quest_id)
-                        
-                        if check_result:
-                            logger.info(f"{self.session_name} {emoji['success']} | Квест проверен, ожидаем обновления статуса")
-                        else:
-                            logger.info(f"{self.session_name} {emoji['info']} | Квест еще не выполнен")
-                
-                done_quests = [q for q in all_quests if q.get("state") == "done"]
-                if done_quests:
-                    logger.info(f"{self.session_name} {emoji['success']} | Завершено квестов: {len(done_quests)}")
             
             lootboxes = await self._get_lootboxes()
             
