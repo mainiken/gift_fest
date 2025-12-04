@@ -397,70 +397,76 @@ class BaseBot:
                         else:
                             logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду")
             
-            main_progress = await self._get_main_progress()
-            
-            if main_progress:
+            while True:
+                main_progress = await self._get_main_progress()
+                
+                if not main_progress:
+                    break
+                
                 completed_progress = [
                     q for q in main_progress if q.get("state") == "completed"
                 ]
                 
-                if completed_progress:
-                    logger.info(
-                        f"{self.session_name} {emoji['success']} | "
-                        f"Найдено {len(completed_progress)} наград основного прогресса"
-                    )
-                    
-                    for quest in completed_progress:
-                        quest_title = quest.get("title", "Unknown")
-                        quest_id = quest.get("id")
-                        quest_uuid = quest.get("uuid")
-                        quest_type = quest.get("type", "unknown")
+                if not completed_progress:
+                    break
+                
+                logger.info(
+                    f"{self.session_name} {emoji['success']} | "
+                    f"Найдено {len(completed_progress)} наград основного прогресса"
+                )
+                
+                quest = completed_progress[0]
+                quest_title = quest.get("title", "Unknown")
+                quest_id = quest.get("id")
+                quest_uuid = quest.get("uuid")
+                quest_type = quest.get("type", "unknown")
+                
+                logger.info(
+                    f"{self.session_name} {emoji['miner']} | "
+                    f"Собираем награду '{quest_title}'"
+                )
+                
+                await asyncio.sleep(uniform(2, 5))
+                
+                await self._send_main_progress_analytics(quest_id, quest_type)
+                
+                await asyncio.sleep(uniform(1, 2))
+                
+                collect_result = await self._collect_quest_reward(quest_uuid)
+                
+                if collect_result and collect_result.get("result"):
+                    rewards = collect_result.get("rewards", [])
+                    for reward in rewards:
+                        reward_type = reward.get("type", "unknown")
+                        reward_amount = reward.get("amount", 0)
+                        reward_title = reward.get("title", "")
                         
-                        logger.info(
-                            f"{self.session_name} {emoji['miner']} | "
-                            f"Собираем награду основного прогресса '{quest_title}'"
-                        )
-                        
-                        await asyncio.sleep(uniform(2, 5))
-                        
-                        await self._send_main_progress_analytics(quest_id, quest_type)
-                        
-                        await asyncio.sleep(uniform(1, 2))
-                        
-                        collect_result = await self._collect_quest_reward(quest_uuid)
-                        
-                        if collect_result and collect_result.get("result"):
-                            rewards = collect_result.get("rewards", [])
-                            for reward in rewards:
-                                reward_type = reward.get("type", "unknown")
-                                reward_amount = reward.get("amount", 0)
-                                reward_title = reward.get("title", "")
-                                
-                                if reward_type == "lottery_chances":
-                                    logger.info(
-                                        f"{self.session_name} {emoji['success']} | "
-                                        f"Получено {reward_amount} билетов в розыгрыш"
-                                    )
-                                elif reward_type == "lootbox":
-                                    logger.info(
-                                        f"{self.session_name} {emoji['success']} | "
-                                        f"Получен лутбокс: {reward_title}"
-                                    )
-                                elif reward_type == "game2048_item":
-                                    logger.info(
-                                        f"{self.session_name} {emoji['success']} | "
-                                        f"Получен игровой предмет: {reward_title}"
-                                    )
-                                else:
-                                    logger.info(
-                                        f"{self.session_name} {emoji['success']} | "
-                                        f"Получена награда: {reward_title or reward_type}"
-                                    )
-                        else:
-                            logger.warning(
-                                f"{self.session_name} {emoji['warning']} | "
-                                f"Не удалось собрать награду"
+                        if reward_type == "lottery_chances":
+                            logger.info(
+                                f"{self.session_name} {emoji['success']} | "
+                                f"Получено {reward_amount} билетов в розыгрыш"
                             )
+                        elif reward_type == "lootbox":
+                            logger.info(
+                                f"{self.session_name} {emoji['success']} | "
+                                f"Получен лутбокс: {reward_title}"
+                            )
+                        elif reward_type == "game2048_item":
+                            logger.info(
+                                f"{self.session_name} {emoji['success']} | "
+                                f"Получен игровой предмет: {reward_title}"
+                            )
+                        else:
+                            logger.info(
+                                f"{self.session_name} {emoji['success']} | "
+                                f"Получена награда: {reward_title or reward_type}"
+                            )
+                else:
+                    logger.warning(
+                        f"{self.session_name} {emoji['warning']} | "
+                        f"Не удалось собрать награду"
+                    )
+                    break
             
             lootboxes = await self._get_lootboxes()
             
