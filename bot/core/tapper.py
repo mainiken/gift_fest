@@ -348,17 +348,17 @@ class BaseBot:
             advent_quests = await self._get_quests(tag="gift_advent")
             
             if advent_quests:
-                ready_advent = [
-                    q for q in advent_quests if q.get("state") == "ready"
+                pending_advent = [
+                    q for q in advent_quests if q.get("state") == "pending"
                 ]
                 
-                if ready_advent:
+                if pending_advent:
                     logger.info(
                         f"{self.session_name} {emoji['success']} | "
-                        f"Найдено {len(ready_advent)} карточек адвент-календаря"
+                        f"Найдено {len(pending_advent)} карточек адвент-календаря"
                     )
                     
-                    for quest in ready_advent:
+                    for quest in pending_advent:
                         quest_title = quest.get("title", "Unknown")
                         quest_id = quest.get("id")
                         quest_uuid = quest.get("uuid")
