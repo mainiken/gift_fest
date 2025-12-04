@@ -1179,7 +1179,7 @@ class GiftFestBot(BaseBot):
             
         response = await self.make_request(
             method="GET",
-            url=f"{self._API_URL}/inventory?limit=50&include=game2048_item&pagination=0",
+            url=f"{self._API_URL}/inventory?include=game2048_item&include=game2048_field_cell",
             headers=headers
         )
         
