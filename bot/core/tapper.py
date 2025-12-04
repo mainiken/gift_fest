@@ -397,7 +397,12 @@ class BaseBot:
                         else:
                             logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду")
             
-            while True:
+            max_progress_attempts = 3
+            progress_attempt = 0
+            
+            while progress_attempt < max_progress_attempts:
+                progress_attempt += 1
+                
                 main_progress = await self._get_main_progress()
                 
                 if not main_progress:
@@ -504,32 +509,42 @@ class BaseBot:
                 logger.info(f"{self.session_name} {emoji['info']} | В инвентаре {len(game_items)} игровых предметов")
                 
                 game_state = await self._get_game_state()
-                cells = game_state.get("cells", [])
-                empty_cells = [cell for cell in cells if not cell.get("item")]
                 
-                if empty_cells and game_items:
-                    items_to_place = min(len(game_items), len(empty_cells))
+                if not game_state:
+                    logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось получить состояние игры")
+                else:
+                    cells = game_state.get("cells", [])
+                    empty_cells = [cell for cell in cells if not cell.get("item")]
                     
-                    logger.info(f"{self.session_name} {emoji['miner']} | Размещаем {items_to_place} предметов на доске")
-                    
-                    for i in range(items_to_place):
-                        item = game_items[i]
-                        cell = empty_cells[i]
+                    if empty_cells and game_items:
+                        items_to_place = min(len(game_items), len(empty_cells))
                         
-                        item_id = item.get("id")
-                        item_title = item.get("reward", {}).get("title", "Unknown")
-                        cell_id = cell.get("id")
+                        logger.info(f"{self.session_name} {emoji['miner']} | Размещаем {items_to_place} предметов на доске")
                         
-                        await asyncio.sleep(uniform(1, 3))
-                        
-                        place_result = await self._place_item_on_board(cell_id, item_id)
-                        
-                        if place_result and place_result.get("field"):
-                            logger.info(f"{self.session_name} {emoji['success']} | Размещен '{item_title}' на ячейке {cell_id}")
-                        else:
-                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось разместить '{item_title}'")
+                        for i in range(items_to_place):
+                            item = game_items[i]
+                            cell = empty_cells[i]
+                            
+                            item_id = item.get("id")
+                            item_title = item.get("reward", {}).get("title", "Unknown")
+                            cell_id = cell.get("id")
+                            
+                            await asyncio.sleep(uniform(1, 3))
+                            
+                            place_result = await self._place_item_on_board(cell_id, item_id)
+                            
+                            if place_result and place_result.get("field"):
+                                logger.info(f"{self.session_name} {emoji['success']} | Размещен '{item_title}' на ячейке {cell_id}")
+                            else:
+                                logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось разместить '{item_title}'")
             
             resources_data = await self._get_resources()
+            
+            if not resources_data:
+                logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось получить ресурсы")
+                await asyncio.sleep(60)
+                return
+            
             resources = resources_data.get("resources", [])
             
             energy_resource = next((r for r in resources if r.get("slug") == "energy"), None)
