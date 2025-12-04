@@ -347,29 +347,66 @@ class BaseBot:
             
             daily_quests = await self._get_quests(tag="gift_quests_daily")
             partner_quests = await self._get_quests(tag="gift_quests_partner")
+            epic_quests = await self._get_quests(tag="gift_quests_epic")
             advent_quests = await self._get_quests(tag="gift_advent")
             
-            all_quests = (daily_quests or []) + (partner_quests or []) + (advent_quests or [])
+            all_quests = (
+                (daily_quests or []) +
+                (partner_quests or []) +
+                (epic_quests or []) +
+                (advent_quests or [])
+            )
             
             if all_quests:
+                pending_advent = [
+                    q for q in all_quests
+                    if q.get("state") == "pending"
+                    and q.get("type") == "simple_binary"
+                    and q.get("title", "").startswith("advent_")
+                ]
                 completed_quests = [q for q in all_quests if q.get("state") == "completed"]
+                
+                if pending_advent:
+                    logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(pending_advent)} карточек адвент-календаря для открытия")
+                    
+                    for quest in pending_advent:
+                        quest_title = quest.get("title", "Unknown")
+                        quest_id = quest.get("id")
+                        quest_uuid = quest.get("uuid")
+                        
+                        logger.info(f"{self.session_name} {emoji['miner']} | Открываем карточку адвент-календаря '{quest_title}'")
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        collect_result = await self._collect_quest_reward(quest_uuid)
+                        
+                        if collect_result and collect_result.get("result"):
+                            rewards = collect_result.get("rewards", [])
+                            reward_amount = 1
+                            for reward in rewards:
+                                reward_slug = reward.get("slug", "")
+                                reward_amount = reward.get("real_amount", 1)
+                                
+                                logger.info(f"{self.session_name} {emoji['success']} | Получено из календаря: {reward_amount} {reward_slug}")
+                            
+                            if quest_id:
+                                await asyncio.sleep(uniform(1, 2))
+                                await self._send_advent_analytics(quest_id, reward_amount)
+                        else:
+                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось открыть карточку")
                 
                 if completed_quests:
                     logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(completed_quests)} выполненных квестов для сбора наград")
                     
                     for quest in completed_quests:
                         quest_title = quest.get("title", "Unknown")
-                        quest_type = quest.get("type", "unknown")
-                        is_advent = quest_type == "simple_binary" and quest_title.startswith("advent_")
+                        quest_uuid = quest.get("uuid")
                         
-                        if is_advent:
-                            logger.info(f"{self.session_name} {emoji['miner']} | Собираем награду из адвент-календаря '{quest_title}'")
-                        else:
-                            logger.info(f"{self.session_name} {emoji['miner']} | Собираем награду за '{quest_title}'")
+                        logger.info(f"{self.session_name} {emoji['miner']} | Собираем награду за '{quest_title}'")
                         
                         await asyncio.sleep(uniform(2, 5))
                         
-                        collect_result = await self._collect_quest_reward()
+                        collect_result = await self._collect_quest_reward(quest_uuid)
                         
                         if collect_result and collect_result.get("result"):
                             rewards = collect_result.get("rewards", [])
@@ -381,8 +418,6 @@ class BaseBot:
                                 if reward_type == "lootbox":
                                     reward_title = reward.get("title", "Лутбокс")
                                     logger.info(f"{self.session_name} {emoji['success']} | Получен лутбокс: {reward_title}")
-                                elif reward_type == "calendar":
-                                    logger.info(f"{self.session_name} {emoji['success']} | Получено из календаря: {reward_amount} {reward_slug}")
                                 elif reward_slug:
                                     logger.info(f"{self.session_name} {emoji['success']} | Получено: {reward_amount} {reward_slug}")
                                 else:
@@ -746,22 +781,77 @@ class GiftFestBot(BaseBot):
             return response
         return []
 
-    async def _collect_quest_reward(self) -> dict:
+    async def _collect_quest_reward(
+        self,
+        quest_uuid: Optional[str] = None
+    ) -> dict:
         """Собирает награду за выполненный квест"""
         import uuid
         
         headers = self._get_auth_headers()
-        headers["x-request-id"] = str(uuid.uuid4())
+        headers["x-request-id"] = quest_uuid if quest_uuid else str(uuid.uuid4())
         headers["content-length"] = "0"
         
         if settings.DEBUG_LOGGING:
-            logger.debug(f"[{self.session_name}] _collect_quest_reward")
+            logger.debug(
+                f"[{self.session_name}] _collect_quest_reward: "
+                f"quest_uuid={quest_uuid}"
+            )
             
         response = await self.make_request(
             method="POST",
             url=f"{self._API_URL}/wrapquests/collect",
             headers=headers,
             json={}
+        )
+        
+        return response or {}
+
+    async def _send_advent_analytics(
+        self,
+        quest_id: int,
+        reward_amount: int
+    ) -> dict:
+        """Отправляет аналитику после открытия карточки адвент-календаря"""
+        from time import time
+        
+        headers = self._get_auth_headers()
+        
+        event_data = {
+            "event_name": "advent_cancel_share_tap",
+            "event_data": json.dumps({
+                "reward_resource_amount": reward_amount,
+                "quest_id": quest_id
+            }),
+            "page": "/advent",
+            "client_timestamp": int(time()),
+            "initiator": "ma_prod",
+            "session": {
+                "auth_date": int(time()),
+                "language": "ru"
+            },
+            "device": {
+                "user_agent": headers.get(
+                    "user-agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                ),
+                "browser": "edge",
+                "browser_version": "142.0.0.0",
+                "os": "windows"
+            }
+        }
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(
+                f"[{self.session_name}] _send_advent_analytics: "
+                f"quest_id={quest_id}, reward_amount={reward_amount}"
+            )
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/analytics/clientEvent",
+            headers=headers,
+            json=event_data
         )
         
         return response or {}
