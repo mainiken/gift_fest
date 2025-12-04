@@ -479,16 +479,17 @@ class BaseBot:
                 logger.info(f"{self.session_name} {emoji['info']} | Найдено {len(lootboxes)} типов лутбоксов")
                 
                 for lootbox_group in lootboxes:
-                    reward_amount = lootbox_group.get("reward_amount", 0)
+                    amount = lootbox_group.get("amount", 0)
                     count = lootbox_group.get("count", 0)
-                    title = lootbox_group.get("title", "Unknown")
+                    item = lootbox_group.get("item", {})
+                    title = item.get("title", "Unknown")
                     
                     if count > 0:
                         logger.info(f"{self.session_name} {emoji['miner']} | Открываем {count}x '{title}'")
                         
                         await asyncio.sleep(uniform(2, 5))
                         
-                        activate_result = await self._activate_lootboxes(reward_amount, "lootbox", count)
+                        activate_result = await self._activate_lootboxes(amount, "lootbox", count)
                         
                         if activate_result:
                             activated = activate_result.get("activated", 0)
