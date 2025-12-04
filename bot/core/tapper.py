@@ -345,56 +345,12 @@ class BaseBot:
         try:
             emoji = self.EMOJI
             
-            advent_quests = await self._get_quests(tag="gift_advent")
-            
-            if advent_quests:
-                pending_advent = [
-                    q for q in advent_quests if q.get("state") == "pending"
-                ]
-                
-                if pending_advent:
-                    logger.info(
-                        f"{self.session_name} {emoji['success']} | "
-                        f"Найдено {len(pending_advent)} карточек адвент-календаря"
-                    )
-                    
-                    for quest in pending_advent:
-                        quest_title = quest.get("title", "Unknown")
-                        quest_id = quest.get("id")
-                        quest_uuid = quest.get("uuid")
-                        
-                        logger.info(
-                            f"{self.session_name} {emoji['miner']} | "
-                            f"Открываем карточку '{quest_title}'"
-                        )
-                        
-                        await asyncio.sleep(uniform(2, 5))
-                        
-                        collect_result = await self._collect_quest_reward(quest_uuid)
-                        
-                        if collect_result and collect_result.get("result"):
-                            rewards = collect_result.get("rewards", [])
-                            reward_amount = 1
-                            for reward in rewards:
-                                reward_slug = reward.get("slug", "")
-                                reward_amount = reward.get("real_amount", 1)
-                                
-                                logger.info(
-                                    f"{self.session_name} {emoji['success']} | "
-                                    f"Получено: {reward_amount} {reward_slug}"
-                                )
-                            
-                            if quest_id:
-                                await asyncio.sleep(uniform(1, 2))
-                                await self._send_advent_analytics(
-                                    quest_id,
-                                    reward_amount
-                                )
-                        else:
-                            logger.warning(
-                                f"{self.session_name} {emoji['warning']} | "
-                                f"Не удалось открыть карточку"
-                            )
+            advent_collected = await self._check_advent_calendar()
+            if advent_collected:
+                logger.info(
+                    f"{self.session_name} {emoji['success']} | "
+                    f"Адвент-календарь: собрана карточка '{advent_collected}'"
+                )
             
             daily_quests = await self._get_quests(tag="gift_quests_daily")
             partner_quests = await self._get_quests(tag="gift_quests_partner")
@@ -1002,6 +958,65 @@ class GiftFestBot(BaseBot):
         )
         
         return response or {}
+
+    async def _check_advent_calendar(self) -> Optional[str]:
+        """Проверяет и собирает одну карточку адвент-календаря раз в 24 часа"""
+        from time import time
+        import os
+        
+        advent_file = f"bot/config/lock_files/advent_{self.session_name}.txt"
+        
+        if os.path.exists(advent_file):
+            with open(advent_file, 'r') as f:
+                last_collect_time = float(f.read().strip())
+                if time() - last_collect_time < 86400:
+                    return None
+        
+        advent_quests = await self._get_quests(tag="gift_advent")
+        
+        if not advent_quests:
+            return None
+        
+        completed_advent = [
+            q for q in advent_quests
+            if q.get("state") == "completed" and q.get("uuid")
+        ]
+        
+        if not completed_advent:
+            return None
+        
+        for quest in completed_advent:
+            quest_title = quest.get("title", "Unknown")
+            quest_id = quest.get("id")
+            quest_uuid = quest.get("uuid")
+            
+            if settings.DEBUG_LOGGING:
+                logger.debug(
+                    f"[{self.session_name}] Пробуем собрать '{quest_title}'"
+                )
+            
+            await asyncio.sleep(uniform(2, 5))
+            
+            collect_result = await self._collect_quest_reward(quest_uuid)
+            
+            if collect_result and collect_result.get("result"):
+                rewards = collect_result.get("rewards", [])
+                reward_amount = 1
+                for reward in rewards:
+                    reward_slug = reward.get("slug", "")
+                    reward_amount = reward.get("real_amount", 1)
+                
+                if quest_id:
+                    await asyncio.sleep(uniform(1, 2))
+                    await self._send_advent_analytics(quest_id, reward_amount)
+                
+                os.makedirs("bot/config/lock_files", exist_ok=True)
+                with open(advent_file, 'w') as f:
+                    f.write(str(time()))
+                
+                return quest_title
+        
+        return None
 
     async def _get_inventory(self, limit: int = 10, include: str = "promo_code") -> dict:
         """Получает инвентарь пользователя"""
