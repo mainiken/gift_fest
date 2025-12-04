@@ -425,6 +425,71 @@ class BaseBot:
                         else:
                             logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось собрать награду")
             
+            main_progress = await self._get_main_progress()
+            
+            if main_progress:
+                completed_progress = [
+                    q for q in main_progress if q.get("state") == "completed"
+                ]
+                
+                if completed_progress:
+                    logger.info(
+                        f"{self.session_name} {emoji['success']} | "
+                        f"Найдено {len(completed_progress)} наград основного прогресса"
+                    )
+                    
+                    for quest in completed_progress:
+                        quest_title = quest.get("title", "Unknown")
+                        quest_id = quest.get("id")
+                        quest_uuid = quest.get("uuid")
+                        quest_type = quest.get("type", "unknown")
+                        
+                        logger.info(
+                            f"{self.session_name} {emoji['miner']} | "
+                            f"Собираем награду основного прогресса '{quest_title}'"
+                        )
+                        
+                        await asyncio.sleep(uniform(2, 5))
+                        
+                        await self._send_main_progress_analytics(quest_id, quest_type)
+                        
+                        await asyncio.sleep(uniform(1, 2))
+                        
+                        collect_result = await self._collect_quest_reward(quest_uuid)
+                        
+                        if collect_result and collect_result.get("result"):
+                            rewards = collect_result.get("rewards", [])
+                            for reward in rewards:
+                                reward_type = reward.get("type", "unknown")
+                                reward_amount = reward.get("amount", 0)
+                                reward_title = reward.get("title", "")
+                                
+                                if reward_type == "lottery_chances":
+                                    logger.info(
+                                        f"{self.session_name} {emoji['success']} | "
+                                        f"Получено {reward_amount} билетов в розыгрыш"
+                                    )
+                                elif reward_type == "lootbox":
+                                    logger.info(
+                                        f"{self.session_name} {emoji['success']} | "
+                                        f"Получен лутбокс: {reward_title}"
+                                    )
+                                elif reward_type == "game2048_item":
+                                    logger.info(
+                                        f"{self.session_name} {emoji['success']} | "
+                                        f"Получен игровой предмет: {reward_title}"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"{self.session_name} {emoji['success']} | "
+                                        f"Получена награда: {reward_title or reward_type}"
+                                    )
+                        else:
+                            logger.warning(
+                                f"{self.session_name} {emoji['warning']} | "
+                                f"Не удалось собрать награду"
+                            )
+            
             lootboxes = await self._get_lootboxes()
             
             if lootboxes:
@@ -845,6 +910,72 @@ class GiftFestBot(BaseBot):
             logger.debug(
                 f"[{self.session_name}] _send_advent_analytics: "
                 f"quest_id={quest_id}, reward_amount={reward_amount}"
+            )
+            
+        response = await self.make_request(
+            method="POST",
+            url=f"{self._API_URL}/analytics/clientEvent",
+            headers=headers,
+            json=event_data
+        )
+        
+        return response or {}
+
+    async def _get_main_progress(self) -> list:
+        """Получает список основного прогресса"""
+        headers = self._get_auth_headers()
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(f"[{self.session_name}] _get_main_progress")
+            
+        response = await self.make_request(
+            method="GET",
+            url=f"{self._API_URL}/wrapquests?tag=gift_main_progress&no_ord_done=true",
+            headers=headers
+        )
+        
+        if isinstance(response, list):
+            return response
+        return []
+
+    async def _send_main_progress_analytics(
+        self,
+        quest_id: int,
+        quest_type: str
+    ) -> dict:
+        """Отправляет аналитику перед сбором награды основного прогресса"""
+        from time import time
+        
+        headers = self._get_auth_headers()
+        
+        event_data = {
+            "event_name": "quest_collect_reward_tap",
+            "event_data": json.dumps({
+                "quest_id": quest_id,
+                "quest_type": quest_type
+            }),
+            "page": "/giveaway",
+            "client_timestamp": int(time()),
+            "initiator": "ma_prod",
+            "session": {
+                "auth_date": int(time()),
+                "language": "ru"
+            },
+            "device": {
+                "user_agent": headers.get(
+                    "user-agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                ),
+                "browser": "edge",
+                "browser_version": "142.0.0.0",
+                "os": "windows"
+            }
+        }
+        
+        if settings.DEBUG_LOGGING:
+            logger.debug(
+                f"[{self.session_name}] _send_main_progress_analytics: "
+                f"quest_id={quest_id}, quest_type={quest_type}"
             )
             
         response = await self.make_request(
