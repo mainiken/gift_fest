@@ -345,36 +345,28 @@ class BaseBot:
         try:
             emoji = self.EMOJI
             
-            daily_quests = await self._get_quests(tag="gift_quests_daily")
-            partner_quests = await self._get_quests(tag="gift_quests_partner")
-            epic_quests = await self._get_quests(tag="gift_quests_epic")
             advent_quests = await self._get_quests(tag="gift_advent")
             
-            all_quests = (
-                (daily_quests or []) +
-                (partner_quests or []) +
-                (epic_quests or []) +
-                (advent_quests or [])
-            )
-            
-            if all_quests:
-                pending_advent = [
-                    q for q in all_quests
-                    if q.get("state") == "pending"
-                    and q.get("type") == "simple_binary"
-                    and q.get("title", "").startswith("advent_")
+            if advent_quests:
+                ready_advent = [
+                    q for q in advent_quests if q.get("state") == "ready"
                 ]
-                completed_quests = [q for q in all_quests if q.get("state") == "completed"]
                 
-                if pending_advent:
-                    logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(pending_advent)} карточек адвент-календаря для открытия")
+                if ready_advent:
+                    logger.info(
+                        f"{self.session_name} {emoji['success']} | "
+                        f"Найдено {len(ready_advent)} карточек адвент-календаря"
+                    )
                     
-                    for quest in pending_advent:
+                    for quest in ready_advent:
                         quest_title = quest.get("title", "Unknown")
                         quest_id = quest.get("id")
                         quest_uuid = quest.get("uuid")
                         
-                        logger.info(f"{self.session_name} {emoji['miner']} | Открываем карточку адвент-календаря '{quest_title}'")
+                        logger.info(
+                            f"{self.session_name} {emoji['miner']} | "
+                            f"Открываем карточку '{quest_title}'"
+                        )
                         
                         await asyncio.sleep(uniform(2, 5))
                         
@@ -387,13 +379,37 @@ class BaseBot:
                                 reward_slug = reward.get("slug", "")
                                 reward_amount = reward.get("real_amount", 1)
                                 
-                                logger.info(f"{self.session_name} {emoji['success']} | Получено из календаря: {reward_amount} {reward_slug}")
+                                logger.info(
+                                    f"{self.session_name} {emoji['success']} | "
+                                    f"Получено: {reward_amount} {reward_slug}"
+                                )
                             
                             if quest_id:
                                 await asyncio.sleep(uniform(1, 2))
-                                await self._send_advent_analytics(quest_id, reward_amount)
+                                await self._send_advent_analytics(
+                                    quest_id,
+                                    reward_amount
+                                )
                         else:
-                            logger.warning(f"{self.session_name} {emoji['warning']} | Не удалось открыть карточку")
+                            logger.warning(
+                                f"{self.session_name} {emoji['warning']} | "
+                                f"Не удалось открыть карточку"
+                            )
+            
+            daily_quests = await self._get_quests(tag="gift_quests_daily")
+            partner_quests = await self._get_quests(tag="gift_quests_partner")
+            epic_quests = await self._get_quests(tag="gift_quests_epic")
+            
+            all_quests = (
+                (daily_quests or []) +
+                (partner_quests or []) +
+                (epic_quests or [])
+            )
+            
+            if all_quests:
+                completed_quests = [
+                    q for q in all_quests if q.get("state") == "completed"
+                ]
                 
                 if completed_quests:
                     logger.info(f"{self.session_name} {emoji['success']} | Найдено {len(completed_quests)} выполненных квестов для сбора наград")
